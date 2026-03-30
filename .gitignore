@@ -21,3 +21,10 @@ x86/
 # Local helper folders
 .claude/
 .cache/
+
+# Local-only project files
+build.bat
+*.sln
+*.vcxproj
+*.vcxproj.filters
+

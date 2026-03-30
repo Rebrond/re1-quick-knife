@@ -11,8 +11,8 @@
 
 ---
 
-### Releasing RB can briefly snap to pistol-ready, then lower immediately
-**What happens:** After releasing **RB**, the character can briefly show a pistol-ready or pistol-aim pose and then immediately lower the weapon.
+### Releasing RB can briefly snap to weapon-ready, then lower immediately
+**What happens:** After releasing **RB**, the character can briefly show a weapon-ready or weapon-aim pose and then immediately lower the weapon.
 
 **Current understanding:** The restore path is better than earlier builds, but the game can still expose a transitional firearm state before the final lowered state settles.
 
@@ -32,3 +32,4 @@
 ## Resolved
 
 No resolved issues have been recorded in this standalone public changelog yet. Historical experimentation happened in the larger private workspace before this repo was split out.
+

@@ -4,6 +4,8 @@ A DLL gameplay mod for **Resident Evil 1 PC (Classic REBirth)** that adds a dedi
 
 This repository is a standalone snapshot of the current working quick-knife branch extracted from a larger private workspace on **March 30, 2026**. It is intended to be GitHub-ready, reproducible, and easier to iterate on separately from the main `analog3d` project.
 
+The public source file in this repo is intentionally named `dllmain_noflicker.cpp` because it comes from the active Codex working copy, not from the separate Claude-oriented `dllmain.cpp` file in the original workspace.
+
 ## Current status
 
 This is a **work-in-progress gameplay build**, not a final release.
@@ -16,7 +18,7 @@ What currently works:
 
 Known remaining issues:
 - Sometimes the knife prepare animation is skipped and the character enters knife aim immediately
-- Sometimes releasing **RB** briefly shows a pistol-ready / pistol-lower snap
+- Sometimes releasing **RB** briefly shows a weapon-ready / weapon-lower snap
 - Flicker has been reduced compared to earlier builds, but longer playtesting is still required
 
 See [KNOWN_ISSUES.md](KNOWN_ISSUES.md) for the live list.
@@ -54,23 +56,9 @@ The mod was developed against the GOG PC release used in the main workspace. Com
 
 ## Build
 
-From a Developer Command Prompt, or from a normal shell if `MSBuild.exe` is discoverable:
+This public snapshot is currently source-focused.
 
-```bat
-build.bat
-```
-
-Or build manually:
-
-```bat
-msbuild quick_knife_codex.sln /p:Configuration=Release /p:Platform=x86
-```
-
-Output:
-
-```text
-Release\quick_knife_codex.dll
-```
+Local build scripts and Visual Studio project files are intentionally not part of the public repository yet, because this snapshot was published primarily to expose the current working quick-knife source and documented bug state.
 
 ## Installation
 
@@ -81,10 +69,8 @@ Release\quick_knife_codex.dll
 
 ## Repository layout
 
-- `dllmain.cpp` - current quick-knife source snapshot
+- `dllmain_noflicker.cpp` - current Codex quick-knife working snapshot
 - `framework.h` - minimal Windows include shim
-- `quick_knife_codex.sln` / `quick_knife_codex.vcxproj` - Visual Studio project files
-- `build.bat` - convenience build script
 - `manifest.txt` - Classic REBirth loader manifest
 - `CHANGELOG.md` - public project history
 - `KNOWN_ISSUES.md` - active unresolved issues
@@ -94,3 +80,6 @@ Release\quick_knife_codex.dll
 This mod was developed through collaboration between the project owner and AI coding assistants during reverse-engineering and gameplay iteration.
 
 The memory research for Resident Evil 1 in the broader workspace relied in part on **[Gemini-Loboto3's RE1-Mod-SDK](https://github.com/Gemini-Loboto3/RE1-Mod-SDK)**.
+
+
+
