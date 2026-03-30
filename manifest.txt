@@ -1,0 +1,4 @@
+[MOD]
+Name = RE1 Quick Knife
+Title = Work In Progress
+Module = quick_knife_codex.dll

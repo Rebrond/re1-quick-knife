@@ -1,0 +1,23 @@
+﻿# Build output
+Release/
+Debug/
+x86/
+*.dll
+*.lib
+*.exp
+*.pdb
+*.obj
+*.idb
+*.ilk
+
+# Logs
+*.log
+
+# Visual Studio local state
+.vs/
+*.user
+*.suo
+
+# Local helper folders
+.claude/
+.cache/
