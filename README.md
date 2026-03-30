@@ -28,7 +28,7 @@ See [KNOWN_ISSUES.md](KNOWN_ISSUES.md) for the live list.
 | Input | Action |
 |-------|--------|
 | XInput **RB** | Hold quick knife |
-| XInput **Y**  | Inventory latch handling used by the mod during inventory preview flow |
+
 
 The current code reads controller state through `XInputGetState`.
 
@@ -52,7 +52,6 @@ The code also contains extensive logging because this project was developed thro
 - XInput-compatible controller
 - Visual Studio with Win32 C++ toolchain
 
-The mod was developed against the GOG PC release used in the main workspace. Compatibility with other executables is not guaranteed.
 
 ## Build
 
