@@ -45,7 +45,7 @@ static FILE* g_log = NULL;
 
 static void LogInit(void)
 {
-    fopen_s(&g_log, "quick_knife_codex_flicker.log", "w");
+    fopen_s(&g_log, "quick_knife.log", "w");
     if (g_log)
     {
         fprintf(g_log, "=== Quick Knife Mod Log ===\n\n");
@@ -209,6 +209,9 @@ static volatile BOOL g_tryLateGameplayLwm = FALSE;
 static volatile BOOL g_lateGameplayLwmDone = FALSE;
 static volatile BOOL g_tryLateRestoreLwm = FALSE;
 static volatile BOOL g_lateRestoreLwmDone = FALSE;
+static volatile BOOL g_knifeReleasing = FALSE;  /* RB released mid-swing — draining attack animation */
+static int           g_swingDrainFrames = 0;    /* frame counter for swing drain cap */
+static volatile int  g_aimBlockFrames   = 0;    /* frames to suppress aim/ready keys after knife restore */
 static volatile BOOL g_deferredKnifePress = FALSE;
 static volatile BOOL g_restoreWakeTrigSent = FALSE;
 static volatile BOOL g_restoreHookWakeTrigSent = FALSE;
@@ -1373,9 +1376,14 @@ static void __cdecl PostCommitStageHook(u32 arg0)
                 *PL_EQUIP_ID, g_savedItemId, *PL_ACTIVE_SLOT, *MODEL_DIRECT_PTR,
                 *(volatile u32*)WEAPON_MODEL_TABLE2);
             LOAD_WEAPON_MODEL_FN((u32)g_savedItemId, WEAPON_MODEL_ARG1, WEAPON_MODEL_TABLE1, WEAPON_MODEL_TABLE2);
+            /* Clear dirty flag after forced LWM so the game's SyncEquip pipeline
+               doesn't immediately re-trigger another equip dispatch cycle, which
+               causes the aiming animation loop when LB is held after restore. */
+            *WEAPON_DIRTY_FLAG = 0x00;
             g_lateRestoreLwmDone = TRUE;
-            Log("LateRestoreLWM: after model=0x%08X tbl2=0x%08X handler=0x%08X",
-                *MODEL_DIRECT_PTR, *(volatile u32*)WEAPON_MODEL_TABLE2, *WEAPON_HANDLER_PTR);
+            Log("LateRestoreLWM: after model=0x%08X tbl2=0x%08X handler=0x%08X dirty=0x%02X",
+                *MODEL_DIRECT_PTR, *(volatile u32*)WEAPON_MODEL_TABLE2, *WEAPON_HANDLER_PTR,
+                *WEAPON_DIRTY_FLAG);
         }
     }
 
@@ -2144,7 +2152,10 @@ static void __cdecl QuickKnifeInjectFn(void)
         *WEAPON_HANDLER_PTR = g_savedHandlerPtr;
         *(volatile u32*)WEAPON_MODEL_TABLE2 = g_savedTbl2;
         *WEAPON_DIRTY_FLAG = 0xFF;
-        g_restoreFlipHoldBudget = 4;  /* hide the brief holster/restore mismatch until pistol visuals are back */
+        /* If swingDone already armed the budget (drain path), don't reduce it.
+           Otherwise arm it fresh for normal (non-swing) RB releases. */
+        if (g_restoreFlipHoldBudget < 8)
+            g_restoreFlipHoldBudget = 8;
         g_restoreFlipSettleBudget = 0;
         g_restoreFlipLogBudget = 0;
         g_postRestoreFrames = 60;
@@ -2192,26 +2203,84 @@ static void __cdecl QuickKnifeInjectFn(void)
                 *DISPATCHER_STATE, *DISPATCHER_SUBSTATE, *PL_PKAN, *PL_PSEQ, *G_KEY);
         }
 
-        if (stateNow == 0x14 || (stateNow == 0x13 && subNow == 0) || seqNow == 0x09 || seqNow == 0x06)
-            s_needKnifeReadyRetrigger = TRUE;
-
-        *G_KEY |= (u16)KEY_READY;
-        if (!s_prevKnifeActive)
-            *G_KEY_TRG |= (u16)KEY_READY;
-        else if (s_needKnifeReadyRetrigger &&
-                 stateNow == 0x13 &&
-                 subNow == 1 &&
-                 seqNow == 0x0A)
+        if (g_knifeReleasing)
         {
-            *G_KEY_TRG |= (u16)KEY_READY;
-            s_needKnifeReadyRetrigger = FALSE;
-            if (s_readyRetriggerLogBudget < 8)
+            /* RB was released mid-swing. Keep KEY_READY held so the attack animation
+               runs to completion. Do NOT inject TRG or retrigger — we are draining only.
+               When dispatch returns to idle (13/01) or the cap is hit, execute the restore. */
+            g_swingDrainFrames++;
+            BOOL swingDone = (stateNow == 0x13 && subNow == 1) ||
+                             (g_swingDrainFrames >= 90);
+            *G_KEY |= (u16)KEY_READY;
+            Log("SwingDrain[%d]: dispatch=%02X/%02X seq=%02X done=%d",
+                g_swingDrainFrames, stateNow, subNow, seqNow, swingDone ? 1 : 0);
+            if (swingDone)
             {
-                s_readyRetriggerLogBudget++;
-                Log("Ready retrigger[%d]: dispatch=%02X/%02X seq=%02X frame72=%02X frame73=%02X key=0x%04X",
-                    s_readyRetriggerLogBudget,
-                    stateNow, subNow, seqNow,
-                    *DISPATCHER_FRAME72, *DISPATCHER_FRAME73, *G_KEY);
+                /* Commit the full release that KnifeThread deferred.
+                   Only restore inventory state here — do NOT write PL_EQUIP_ID or
+                   WEAPON_DIRTY_FLAG. g_needRestoreLoad handles those on the next frame.
+                   Writing dirty flag here AND in g_needRestoreLoad causes two consecutive
+                   dispatch cycles which produces the LB-aim loop bug. */
+                *PL_ACTIVE_SLOT = g_savedSlot;
+                if (g_savedSlot > 0)
+                {
+                    G_ITEM_WORK[(g_savedSlot - 1) * 2]     = g_savedItemId;
+                    G_ITEM_WORK[(g_savedSlot - 1) * 2 + 1] = g_savedItemMeta;
+                }
+                G_ITEM_WORK[KNIFE_SLOT * 2]     = 0;
+                G_ITEM_WORK[KNIFE_SLOT * 2 + 1] = 0;
+
+                g_knifeReleasing        = FALSE;
+                g_swingDrainFrames      = 0;
+                g_knifeActive           = FALSE;
+                g_entryFlipHoldBudget   = 0;
+                g_entryFlipSettleBudget = 0;
+                /* Arm suppress budget NOW so the gap frame between swingDone and
+                   the g_needRestoreLoad one-shot (next frame) is also covered. */
+                g_restoreFlipHoldBudget = 8;
+                g_restoreFlipSettleBudget = 0;
+                g_restoreFlipLogBudget  = 0;
+                g_completedRbCycle      = g_activeRbCycle;
+                g_postRbObserveArmed    = TRUE;
+                g_postRbStableLogged    = FALSE;
+                g_postRbReadyLogBudget  = 0;
+                g_ddPresentLogBudget    = 0;
+                g_tryLateGameplayLwm    = FALSE;
+                g_lateGameplayLwmDone   = FALSE;
+                g_tryLateRestoreLwm     = TRUE;
+                g_lateRestoreLwmDone    = FALSE;
+                g_restoreHookWakeTrigSent = FALSE;
+                g_uiKnifePreviewActive  = FALSE;
+                g_needRestoreLoad       = TRUE;
+                g_aimBlockFrames        = 8;
+                Log("SwingDrain: complete — restore armed drainFrames=%d cap=%d dispatch=%02X/%02X",
+                    g_swingDrainFrames, (g_swingDrainFrames >= 90) ? 1 : 0,
+                    stateNow, subNow);
+            }
+        }
+        else
+        {
+            if (stateNow == 0x14 || (stateNow == 0x13 && subNow == 0) || seqNow == 0x09 || seqNow == 0x06)
+                s_needKnifeReadyRetrigger = TRUE;
+
+            *G_KEY |= (u16)KEY_READY;
+            if (!s_prevKnifeActive)
+                *G_KEY_TRG |= (u16)KEY_READY;
+            else if (s_needKnifeReadyRetrigger &&
+                     stateNow == 0x13 &&
+                     subNow == 1 &&
+                     seqNow == 0x0A)
+            {
+                *G_KEY_TRG |= (u16)KEY_READY;
+                s_needKnifeReadyRetrigger = FALSE;
+                if (s_readyRetriggerLogBudget < 8)
+                {
+                    s_readyRetriggerLogBudget++;
+                    Log("Ready retrigger[%d]: dispatch=%02X/%02X seq=%02X frame72=%02X frame73=%02X key=0x%04X",
+                        s_readyRetriggerLogBudget,
+                        stateNow, subNow, seqNow,
+                        *DISPATCHER_FRAME72, *DISPATCHER_FRAME73, *G_KEY);
+                }
             }
         }
         s_prevKnifeActive = TRUE;
@@ -2222,6 +2291,24 @@ static void __cdecl QuickKnifeInjectFn(void)
         s_prevKnifeActive = FALSE;
         s_needKnifeReadyRetrigger = FALSE;
         s_readyRetriggerLogBudget = 0;
+
+        /* Suppress weapon-action keys during restore window.
+           Covers two phases:
+           Phase 1 (LWM pending): block KEY_READY until LateRestoreLWM confirms model loaded.
+           Phase 2 (settling): block both KEY_READY and KEY_AIM for g_aimBlockFrames more frames
+           after LWM fires, so dispatch settles before player LB/aim input goes through.
+           LB on this player maps to KEY_READY (0x0100), not KEY_AIM, so phase 2 must
+           include KEY_READY to stop the pistol aim+fire animation loop. */
+        if (!g_inventoryLatched &&
+            ((g_tryLateRestoreLwm && !g_lateRestoreLwmDone) || g_aimBlockFrames > 0))
+        {
+            *G_KEY     &= ~(u16)KEY_READY;
+            *G_KEY_TRG &= ~(u16)KEY_READY;
+            *G_KEY     &= ~(u16)KEY_AIM;
+            *G_KEY_TRG &= ~(u16)KEY_AIM;
+        }
+        if (g_aimBlockFrames > 0)
+            g_aimBlockFrames--;
 
         u8 restoreStateNow = *DISPATCHER_STATE;
         u8 restoreSubNow = *DISPATCHER_SUBSTATE;
@@ -2313,6 +2400,16 @@ static void __cdecl QuickKnifeInjectFn(void)
 
         if (g_postRestoreFrames > 0)
             g_postRestoreFrames--;
+
+        /* If timer expired and LateRestoreLWM never fired (model already matched
+           at restore time), force-complete so restorePendingNow clears and stops
+           the deferred-press / KEY_READY injection loop. */
+        if (g_postRestoreFrames == 0 && g_tryLateRestoreLwm && !g_lateRestoreLwmDone)
+        {
+            g_tryLateRestoreLwm  = FALSE;
+            g_lateRestoreLwmDone = TRUE;
+            Log("RestoreTimeout: forced complete — LateRestoreLWM never needed (model already matched)");
+        }
     }
 }
 
@@ -2596,6 +2693,8 @@ static DWORD WINAPI KnifeThread(LPVOID unused)
             }
 
             g_activeRbCycle = ++g_rbCycleCounter;
+            g_knifeReleasing   = FALSE;
+            g_swingDrainFrames = 0;
             g_postRbObserveArmed = FALSE;
             g_postRbStableLogged = FALSE;
             g_postRbReadyLogBudget = 0;
@@ -2676,8 +2775,22 @@ static DWORD WINAPI KnifeThread(LPVOID unused)
             }
             g_knifeActive    = TRUE;
         }
-        else if (!knifeBtn && g_knifeActive)
+        else if (!knifeBtn && g_knifeActive && !g_knifeReleasing)
         {
+            /* Mid-attack guard: if the knife swing is in progress (state 0x14),
+               defer the release to QuickKnifeInjectFn so the animation finishes first. */
+            if (!g_inventoryLatched && *DISPATCHER_STATE == 0x14)
+            {
+                g_knifeReleasing   = TRUE;
+                g_swingDrainFrames = 0;
+                Log("RB cycle[%d]: release mid-attack — drain armed dispatch=%02X/%02X",
+                    g_activeRbCycle, *DISPATCHER_STATE, *DISPATCHER_SUBSTATE);
+                prevKnifeBtn = knifeBtn;
+                prevInventoryBtn = inventoryBtn;
+                Sleep(4);
+                continue;
+            }
+
             char dbg1[5], dbg2[5], dbg3[5], dbg4[5];
             ReadDebugKeyStrings(dbg1, dbg2, dbg3, dbg4);
             Log("RB cycle[%d]: release start slot=%d equip=%d model=0x%08X tbl2=0x%08X handler=0x%08X dispatch=%02X/%02X first=%d hold=%d settle=%d post=%d",
@@ -2714,6 +2827,7 @@ static DWORD WINAPI KnifeThread(LPVOID unused)
             g_restoreHookWakeTrigSent = FALSE;
             g_uiKnifePreviewActive = FALSE;
             g_needRestoreLoad = g_inventoryLatched ? FALSE : TRUE;
+            g_aimBlockFrames  = 20;
             g_knifeActive     = FALSE;
             g_entryFlipHoldBudget = 0;
             g_entryFlipSettleBudget = 0;
